@@ -2,11 +2,12 @@ from torch_geometric.datasets import Planetoid
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
+import matplotlib.pyplot as plt
 from torch_geometric.nn.conv import SAGEConv
 
 
-dataset = Planetoid(root='./tmp/cora/', name='Cora')
+dataset = Planetoid(root='../../dataset/', name='Cora')
+B = 64
 # print(dataset[0])
 '''
 Data(x=[2708, 1433], edge_index=[2, 10556], y=[2708], train_mask=[2708], val_mask=[2708], test_mask=[2708])
@@ -19,13 +20,40 @@ Data(x=[2708, 1433], edge_index=[2, 10556], y=[2708], train_mask=[2708], val_mas
 train資料集的點數量:140
 test資料集的點數量 :999
 valid資料集的點數量:500
+value 範圍:-1~1
 '''
+def tinykg(x):
+    # 回傳值:修改後的int tensor, 這個tensor的offset, min值
+    # 關於stochastically rounding 寫法https://stackoverflow.com/questions/62336144/stochastically-rounding-a-float-to-an-integer
+    # 居然是O(1) operation...
+    # i=0
+    # for dim in x:
+    #     _Max = dim.max()
+    #     _Min = dim.min()
+    #     offset = _Max - _Min
+    #     #print(_Max+_Min)
+    #     dim = B*(dim-(_Min))/offset
+    #     # dim = dim/offset
+    #     # x[i] = dim
+    #     i+=1
+    for i in range(len(x)):
+        _Max = x[i].max()
+        _Min = x[i].min()
+        _offset = _Max - _Min
+        # x[i] = B*(x[i]-_Min)/_offset
+        print(len(x[i]))
+    # 先做測試看轉成int會不會降低bias
+    # 確實收斂不了
+    # for dim in range(len(x)):
+    #     x[dim] = x[dim].int()
+    return x
+
 class GraphSAGE(nn.Module):
     def __init__(self):
         super(GraphSAGE, self).__init__()
         self.convs = nn.ModuleList()
-        self.convs.append(SAGEConv(1433, 64))
-        self.convs.append(SAGEConv(64, 32))
+        self.convs.append(SAGEConv(1433, 32))
+        # self.convs.append(SAGEConv(64, 32))
         self.convs.append(SAGEConv(32, 32))
 
         self.dropout = 0.5
@@ -39,10 +67,13 @@ class GraphSAGE(nn.Module):
         # x, edge_index, batch = data.x, data.edge_index, data.batch
 
         x, edge_index = data.x, data.edge_index
-
         for i in range(len(self.convs)):
             x = self.convs[i](x, edge_index)
-            x = int(x)
+            x = tinykg(x)
+            # print(x.shape)
+            # shape:([2708, 32])
+            # print(len(x))
+            # len : 2708
             x = F.relu(x)
             x = F.dropout(x, p=self.dropout, training=self.training)
 
@@ -62,6 +93,7 @@ data = dataset[0]
 losses, val_accs = [], []
 loss_fn = nn.NLLLoss()
 for epoch in range(200):
+    # print(epoch)
     model.train()
     opt.zero_grad()
     out = model(data)
@@ -87,3 +119,9 @@ for epoch in range(200):
         
 print("Maximum accuracy: {0}".format(max(val_accs)))
 print("Minimum loss: {0}".format(min(losses)))
+
+# plt.title(dataset.name)
+# plt.plot(losses, label="training loss" + " - " + "GraphSAGE")
+# plt.plot(val_accs, label="val accuracy" + " - " + "GraphSAGE")
+# plt.legend()
+# plt.show()
