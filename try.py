@@ -4,6 +4,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 import matplotlib.pyplot as plt
 from torch_geometric.nn.conv import SAGEConv
+import math
+from random import random
+from datetime import datetime
 
 
 dataset = Planetoid(root='../../dataset/', name='Cora')
@@ -22,6 +25,10 @@ test資料集的點數量 :999
 valid資料集的點數量:500
 value 範圍:-1~1
 '''
+def sto_op(x):
+    a = math.floor(x)
+    return a +((x-a) > random())
+
 def tinykg(x):
     # 回傳值:修改後的int tensor, 這個tensor的offset, min值
     # 關於stochastically rounding 寫法https://stackoverflow.com/questions/62336144/stochastically-rounding-a-float-to-an-integer
@@ -36,16 +43,22 @@ def tinykg(x):
     #     # dim = dim/offset
     #     # x[i] = dim
     #     i+=1
-    for i in range(len(x)):
-        _Max = x[i].max()
-        _Min = x[i].min()
+    x = x.detach().numpy()
+    for dims in range(len(x)):
+        _Max = x[dims].max()
+        _Min = x[dims].min()
         _offset = _Max - _Min
         # x[i] = B*(x[i]-_Min)/_offset
-        print(len(x[i]))
+        #print(len(x[dims]))
+        for value_in_dim in range(len(x[dims])):
+            #print(x[dims][value_in_dim])
+            x[dims][value_in_dim] = B*(x[dims][value_in_dim] - _Min)/_offset
+            x[dims][value_in_dim] = sto_op(x[dims][value_in_dim])
     # 先做測試看轉成int會不會降低bias
     # 確實收斂不了
     # for dim in range(len(x)):
     #     x[dim] = x[dim].int()
+    x = torch.from_numpy(x)
     return x
 
 class GraphSAGE(nn.Module):
@@ -92,6 +105,7 @@ opt = torch.optim.Adam(filter_fn, lr=learning_rate, weight_decay=weight_decay)
 data = dataset[0]
 losses, val_accs = [], []
 loss_fn = nn.NLLLoss()
+start = datetime.now()
 for epoch in range(200):
     # print(epoch)
     model.train()
@@ -103,7 +117,7 @@ for epoch in range(200):
     losses.append(loss.item())
 
     if epoch % 10 == 0:
-        model.eval()  # 设置模型为验证模式
+        model.eval()  
 
         with torch.no_grad():
             # max(dim=1) returns (values, indices) tuple; only need indices
@@ -115,8 +129,11 @@ for epoch in range(200):
         print('Epoch: {:03d}, Loss: {:.5f}, Val Acc.: {:.3f}'.format(epoch, loss.item(), acc))
         
     else:
-        val_accs.append(val_accs[-1])  # 保证画图时验证集的尺度一直
-        
+        val_accs.append(val_accs[-1])
+
+end = datetime.now()
+print('total time consume : ', end - start)
+
 print("Maximum accuracy: {0}".format(max(val_accs)))
 print("Minimum loss: {0}".format(min(losses)))
 
@@ -125,3 +142,5 @@ print("Minimum loss: {0}".format(min(losses)))
 # plt.plot(val_accs, label="val accuracy" + " - " + "GraphSAGE")
 # plt.legend()
 # plt.show()
+
+
