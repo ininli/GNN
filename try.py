@@ -10,8 +10,15 @@ from datetime import datetime
 from memory_profiler import profile
 import os
 import numpy as np
+from torch.profiler import profile, record_function, ProfilerActivity
+from torch.utils.tensorboard import SummaryWriter
+writer = SummaryWriter()
+
 dataset = Planetoid(root='../../dataset/', name='Cora')
 B = 64
+
+
+
 # print(dataset[0])
 '''
 Data(x=[2708, 1433], edge_index=[2, 10556], y=[2708], train_mask=[2708], val_mask=[2708], test_mask=[2708])
@@ -103,10 +110,10 @@ class GraphSAGE(nn.Module):
 
         for i in range(len(self.convs)):
             x = self.convs[i](x, edge_index)
-            if i:
-                self.int_conv2, self.record_Min_2, self.record_offset_2 = tinykg(x)
-            else:
-                self.int_conv1, self.record_Min_1, self.record_offset_1 = tinykg(x)
+            # if i:
+            #     self.int_conv2, self.record_Min_2, self.record_offset_2 = tinykg(x)
+            # else:
+            #     self.int_conv1, self.record_Min_1, self.record_offset_1 = tinykg(x)
             #print("tinyKG")
             # print(x.shape)
             # shape:([2708, 32])
@@ -135,10 +142,11 @@ class GraphSAGE(nn.Module):
     #     return temp_data
 
 
-device = f'cuda:0' if torch.cuda.is_available() else 'cpu'
+# device = f'cuda:0' if torch.cuda.is_available() else 'cpu'
+device = 'cpu'
 device = torch.device(device)
 model = GraphSAGE()
-model.cuda()
+# model.cuda()
 filter_fn = filter(lambda p: p.requires_grad, model.parameters())
 learning_rate = 1e-2
 weight_decay = 5e-3
@@ -148,33 +156,38 @@ data = dataset[0]
 data.to(device)
 losses, val_accs = [], []
 loss_fn = nn.NLLLoss()
+with torch.autograd.profiler.profile(use_cuda=True) as prof:
+    model(data)
+print(prof.key_averages(group_by_input_shape=True).table())
 start = datetime.now()
 @profile
 def train():
-    for epoch in range(2):
-        # print(epoch)
-        model.train()
-        opt.zero_grad()
-        out = model(data)       # 這邊call forward
-        loss = loss_fn(out[data.train_mask], data.y[data.train_mask])
-        loss.backward()
-        opt.step()
-        losses.append(loss.item())
+    with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA], profile_memory=True) as prof2:
+        with record_function("model inference"):
+            for epoch in range(10):
+                # print(epoch)
+                model.train()
+                opt.zero_grad()
+                out = model(data)       # 這邊call forward
+                loss = loss_fn(out[data.train_mask], data.y[data.train_mask])
+                loss.backward()
+                opt.step()
+                losses.append(loss.item())
+                if epoch % 1 == 0:
+                    model.eval()  
 
-        if epoch % 1 == 0:
-            model.eval()  
+                    with torch.no_grad():
+                        # max(dim=1) returns (values, indices) tuple; only need indices
+                        pred = model(data).max(dim=1)[1]
+                        correct = float(pred[data.val_mask].eq(data.y[data.val_mask]).sum().item())
+                        acc = correct / data.val_mask.sum().item()
 
-            with torch.no_grad():
-                # max(dim=1) returns (values, indices) tuple; only need indices
-                pred = model(data).max(dim=1)[1]
-                correct = float(pred[data.val_mask].eq(data.y[data.val_mask]).sum().item())
-                acc = correct / data.val_mask.sum().item()
-
-            val_accs.append(acc)
-            print('Epoch: {:03d}, Loss: {:.5f}, Val Acc.: {:.3f}'.format(epoch, loss.item(), acc))
-            
-        else:
-            val_accs.append(val_accs[-1])
+                    val_accs.append(acc)
+                    print('Epoch: {:03d}, Loss: {:.5f}, Val Acc.: {:.3f}'.format(epoch, loss.item(), acc))
+                    
+                else:
+                    val_accs.append(val_accs[-1])
+    print(prof2.key_averages().table(row_limit=10))
 
 train()
 end = datetime.now()
