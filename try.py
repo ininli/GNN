@@ -11,6 +11,7 @@ from memory_profiler import profile
 import os
 import numpy as np
 from torch.profiler import profile, record_function, ProfilerActivity
+from torch_geometric.profile import profileit
 from torch.utils.tensorboard import SummaryWriter
 writer = SummaryWriter()
 
@@ -81,12 +82,12 @@ class GraphSAGE(nn.Module):
         self.convs.append(SAGEConv(1433, 32))
         self.convs.append(SAGEConv(32, 32))
 
-        self.int_conv1 = []
-        self.record_Min_1 = []
-        self.record_offset_1 = []
-        self.int_conv2 = []
-        self.record_Min_2 = []
-        self.record_offset_2 = []
+        # self.int_conv1 = []
+        # self.record_Min_1 = []
+        # self.record_offset_1 = []
+        # self.int_conv2 = []
+        # self.record_Min_2 = []
+        # self.record_offset_2 = []
         
         self.dropout = 0.5
         self.post_mp = nn.Sequential(
@@ -142,11 +143,11 @@ class GraphSAGE(nn.Module):
     #     return temp_data
 
 
-# device = f'cuda:0' if torch.cuda.is_available() else 'cpu'
-device = 'cpu'
+device = f'cuda:0' if torch.cuda.is_available() else 'cpu'
+# device = 'cpu'
 device = torch.device(device)
 model = GraphSAGE()
-# model.cuda()
+model.cuda()
 filter_fn = filter(lambda p: p.requires_grad, model.parameters())
 learning_rate = 1e-2
 weight_decay = 5e-3
@@ -156,13 +157,13 @@ data = dataset[0]
 data.to(device)
 losses, val_accs = [], []
 loss_fn = nn.NLLLoss()
-with torch.autograd.profiler.profile(use_cuda=True) as prof:
-    model(data)
-print(prof.key_averages(group_by_input_shape=True).table())
+# with profile(use_cuda=True) as prof:
+#     model(data)
+# print(prof.key_averages(group_by_input_shape=True).table())
 start = datetime.now()
-@profile
+@profileit()
 def train():
-    with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA], profile_memory=True) as prof2:
+    with profile(activities=[ProfilerActivity.CUDA], profile_memory=True) as prof2:
         with record_function("model inference"):
             for epoch in range(10):
                 # print(epoch)
@@ -187,7 +188,7 @@ def train():
                     
                 else:
                     val_accs.append(val_accs[-1])
-    print(prof2.key_averages().table(row_limit=10))
+    print(prof2.key_averages().table(row_limit=5))
 
 train()
 end = datetime.now()
