@@ -10,8 +10,7 @@ import os
 import numpy as np
 from memory_profiler import profile
 dataset = Planetoid(root='../../dataset/', name='Cora')
-B = 64
-
+B = 31.
 
 
 # print(dataset[0])
@@ -32,7 +31,7 @@ def sto_op(x):
     a = math.floor(x)
     return a +((x-a) > random())
 
-def tinykg(x):
+def qunt(x):
     # 回傳值:修改後的int tensor, 這個tensor的offset, min值
     # 關於stochastically rounding 寫法https://stackoverflow.com/questions/62336144/stochastically-rounding-a-float-to-an-integer
     # 居然是O(1) operation...
@@ -46,35 +45,50 @@ def tinykg(x):
     #     # dim = dim/offset
     #     # x[i] = dim
     #     i+=1
-    x = x.cpu().detach().numpy()
+    # detach阻斷反向傳播
+    x1 = x.cpu().detach().numpy()
     record_Min = []
+    record_Min.clear()
     record_offset = []
-    for dims in range(len(x)):
-        _Max = x[dims].max()
-        _Min = x[dims].min()
+    record_offset.clear()
+    for dims in range(len(x1)):     #2708
+        _Max = x1[dims].max()
+        _Min = x1[dims].min()
         _offset = _Max - _Min
         record_Min.append(_Min)
         record_offset.append(_offset)
         # x[i] = B*(x[i]-_Min)/_offset
         #print(len(x[dims]))
         #print(_Min, _Max, _offset)
-        for value_in_dim in range(len(x[dims])):
+        for value_in_dim in range(len(x1[dims])):       #32
             #print(x[dims][value_in_dim])
-            x[dims][value_in_dim] = B*(x[dims][value_in_dim] - _Min)/_offset
-            x[dims][value_in_dim] = int(sto_op(x[dims][value_in_dim]))
+            x1[dims][value_in_dim] = B*(x1[dims][value_in_dim] - _Min)/_offset
+            if not math.isnan(x1[dims][value_in_dim]):
+                x1[dims][value_in_dim] = sto_op(x1[dims][value_in_dim])
     '''暴力int收斂'''
     # for dim in range(len(x)):
     #     x[dim] = x[dim].int()
-    x = torch.from_numpy(x)
+    x1 = torch.from_numpy(x1)
     # print(x.int().type())
-    return x.int(), record_Min, record_offset
+    return x1, record_Min, record_offset
+
+def dequnt(x, Mins, Offsets):
+    x1 = x.cpu().detach().numpy()
+    for dims in range(len(x1)):  #2708
+        _min = Mins[dims]
+        _offset = Offsets[dims]
+        for value_in_dim in range(len(x1[dims])):
+            x1[dims][value_in_dim] = _min + (_offset*x1[dims][value_in_dim])/B
+    
+    return torch.tensor(x1, requires_grad=True)
+
 
 class GraphSAGE(nn.Module):
     def __init__(self):
         super(GraphSAGE, self).__init__()
         self.convs = nn.ModuleList()
-        self.convs.append(SAGEConv(1433, 32))
-        self.convs.append(SAGEConv(32, 32))
+        self.convs.append(SAGEConv(1433, 64))
+        self.convs.append(SAGEConv(64, 32))
 
         # self.int_conv1 = []
         # self.record_Min_1 = []
@@ -90,21 +104,30 @@ class GraphSAGE(nn.Module):
         # print("parameter :\n", self.convs.parameters())
         
         
-        for parm in self.convs[0].parameters():
-            print("parm is :\n", parm)
-            print("parm size:\n", parm.size())
+        # for parm in self.convs[0].parameters():
+        #     print("conv1 parm is :\n", parm)
+        #     print("conv1 size:\n", parm.size())
+        # print("\n\n")
+
         # x = F.relu(x)
         # x = F.dropout(x, p=self.dropout, training=self.training)
-        # print("after tiny: \n", tinykg(x))
+        # print("after tiny: \n", qunt(x))
         x = self.convs[0](x, edge_index)
-        print("x :\n", x)
-        for parm in self.convs[0].parameters():
-            print("parm is :\n", parm)
-            print("parm size:\n", parm.size())
+        # print("x :\n", x)
+        # for parm in self.convs[0].parameters():
+        #     print("parm is :\n", parm)
+        #     print("parm size:\n", parm.size())
         x = self.convs[1](x, edge_index)
+        # x = x.bfloat16()
+        # print("\nx's type", x.type())
+        x1, record_min, record_offset = qunt(x)
+        # print("\nafter qunt ", x1)
+        x2 = dequnt(x1, record_min, record_offset)
+        # print("\nafter dequnt, ", x2)
+        print(x2)
         x = F.relu(x)
+        
         x = F.dropout(x, p=self.dropout, training=self.training)
-
         return F.log_softmax(x, dim=1)
 
 # device = f'cuda:0' if torch.cuda.is_available() else 'cpu'
@@ -115,7 +138,8 @@ model = GraphSAGE()
 filter_fn = filter(lambda p: p.requires_grad, model.parameters())
 learning_rate = 1e-2
 weight_decay = 5e-3
-opt = torch.optim.Adam(filter_fn, lr=learning_rate, weight_decay=weight_decay)
+epochs = 100
+opt = torch.optim.Adam(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
 
 data = dataset[0]
 print("data x's size :\n", data.x.size())
@@ -123,21 +147,26 @@ data.to(device)
 losses, val_accs = [], []
 loss_fn = nn.NLLLoss()
 
-@profile
+# @profile
 def train():
-    for epoch in range(1):
+    start =  datetime.now()
+    for epoch in range(epochs):
         print("\n================\n")
         # print(epoch)
         model.train()
         opt.zero_grad()
         out = model(data)       # 這邊call forward
         loss = loss_fn(out[data.train_mask], data.y[data.train_mask])
-        print("loss is : \n", loss)
+        # print("\n\nafter forward\n\n")
+        # print("loss is : \n", loss)
         # print("loss is :\n")
         # for single_loss in loss.item():
         #     print(single_loss)
         loss.backward()
         opt.step()
+        # for par in model.convs[0].parameters():
+        #     print("\nconv1 is :\n", par)
+        #     print("\nconv1 size:\n", par.size())
         losses.append(loss.item())
         if epoch % 1 == 0:
             model.eval()  
@@ -153,7 +182,8 @@ def train():
             
         else:
             val_accs.append(val_accs[-1])
-
+    end = datetime.now()
+    print("total time consume : ", end - start)
 train()
 
 print("Maximum accuracy: {0}".format(max(val_accs)))
