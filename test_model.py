@@ -34,22 +34,40 @@ class GraphSAGE(nn.Module):
 
 
         x, edge_index = data.x, data.edge_index
-
+        x = torch.quantization.QuantStub(x)
         x = self.convs[0](x, edge_index)
 
-        x1, temp_min, temp_offset = qunt_op(x, B)
-        x2 = dequnt_op(x1, temp_min, temp_offset, B)
+        # if model.training != True:
+        #     start = datetime.now()
+        #             # x1, temp_min, temp_offset = qunt_op(x, B)
+        #             # cent = datetime.now()
+        #             # # print("qunt time :", cent - start)
+        #             # x2 = dequnt_op(x1, temp_min, temp_offset, B)
+        #     x1 = torch.quantize_per_tensor(x, 0.1, 0, torch.quint8)
+        #     x2 = torch.dequantize(x1)
+
+        #     # print("default", x)
+        #     # print("quant ", x1)
+        #     # print("dequnt", x2)
+        #     end = datetime.now()
+        #     # print("a qunt period : ", end - cent)
+        #     x = x2
+
+
+        #     # print(x2)
+            # print(x)
 
         x = self.convs[1](x, edge_index)
         x = F.relu(x)
         x = F.dropout(x, p=self.dropout, training=self.training)
-
+        x = torch.quantization.DeQuantStub(x)
         return F.log_softmax(x, dim=1)
-
 device = 'cpu'
+# device = 'cuda:0'
 device = torch.device(device)
 model = GraphSAGE()
 # model.cuda()
+model.to(device)
 learning_rate = 1e-2
 weight_decay = 5e-3
 epochs = 100
@@ -70,7 +88,7 @@ def train():
         loss.backward()
         opt.step()
         losses.append(loss.item())
-        if epoch % 10 == 0:
+        if epoch % 5 == 0:
             model.eval()  
 
             with torch.no_grad():
@@ -85,7 +103,6 @@ def train():
         else:
             val_accs.append(val_accs[-1])
         
-    end = datetime.now()
 
 
 if __name__ == "__main__":
